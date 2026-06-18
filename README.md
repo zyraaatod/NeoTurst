@@ -35,6 +35,15 @@
 
 ## 🔥 Features
 
+### ⚡ Performance Optimizations
+
+| Feature | Detail |
+|---------|--------|
+| **Concurrent Scanner** | ThreadPoolExecutor — 20 parallel requests per test module |
+| **Combinatorial Payloads** | 200+ unique payloads per category (non-time-based) |
+| **Time-Based Efficiency** | 50 targeted time-delay payloads per sleep-based module |
+| **Session Reuse** | Connection pooling through `requests.Session` |
+
 ### 🧠 NightFury Scanning Engine (18 Modules)
 
 | Category | Module | Description |
@@ -123,7 +132,7 @@ The engine will guide you through:
 
 ```
 NeoTurst/
-├── nightfury.py          # Main scanner (2,570 lines)
+├── nightfury.py          # Main scanner (2,132 lines)
 ├── wordlist.txt          # 220k-line directory wordlist
 ├── sqlmap/               # SQL injection automation tool
 ├── ffuf/                 # Web fuzzer (Go)
@@ -150,7 +159,7 @@ Input URL → Connection Test → Web Crawl (50 pages max)
 
 ### Payload Generation
 
-The engine dynamically generates **500+ payloads per category** (SQLi, XSS, LFI, CMDi) using combinatorial techniques for maximum coverage.
+The engine dynamically generates **200+ unique payloads per category** (SQLi, XSS, LFI, CMDi, SSRF, XXE, SSTI) using combinatorial techniques. All requests are sent **concurrently (20 threads)** for maximum speed.
 
 ---
 
