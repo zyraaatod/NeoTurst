@@ -1,99 +1,208 @@
-# 🐉 NeoTurst: NightFury Maximum Destruction v5.0
 
-[![Python Version](https://img.shields.io/badge/python-3.x-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Termux%20%7C%20macOS-green.svg)]()
+```
+██╗  ██╗███████╗ ██████╗ ████████╗██╗   ██╗██████╗ ███████╗████████╗
+██║  ██║██╔════╝██╔═══██╗╚══██╔══╝██║   ██║██╔══██╗██╔════╝╚══██╔══╝
+███████║█████╗  ██║   ██║   ██║   ██║   ██║██████╔╝█████╗     ██║   
+██╔══██║██╔══╝  ██║   ██║   ██║   ██║   ██║██╔══██╗██╔══╝     ██║   
+██║  ██║███████╗╚██████╔╝   ██║   ╚██████╔╝██║  ██║███████╗   ██║   
+╚═╝  ╚═╝╚══════╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝   
+```
 
-**NeoTurst** (NightFury) is an industrial-grade, maximum-destruction security scanner designed for comprehensive penetration testing. It integrates multiple specialized tools and utilizes over 50+ advanced scanning methods to identify critical vulnerabilities with zero-error precision.
+# NeoTurst — NightFury Maximum Destruction v5.0
 
----
+<p align="center">
+  <b>INDUSTRIAL GRADE · 50+ METHODS · ZERO ERROR</b><br>
+  <i>Advanced All-in-One Web Vulnerability Scanner & Penetration Testing Toolkit</i>
+</p>
 
-## 🚀 Core Capabilities
-
-NeoTurst is equipped with a powerhouse of scanning modules, each targeting specific vulnerability classes:
-
-### 💉 Injection Modules
-- **SQL Injection (14 Types):** Error-based, Time-based Blind, Boolean-based Blind, Union-based, and deep payload generation (500+ payloads).
-- **Command Injection (6 Types):** Both time-based and output-based detection for Linux and Windows targets.
-- **XXE (XML External Entity):** Detecting file disclosure and SSRF via XML parsing.
-- **SSTI (Server-Side Template Injection):** Identification for various template engines (Jinja2, Mako, Twig, etc.).
-
-### 🌐 Web Vulnerability Modules
-- **XSS (8 Types):** Reflected, Stored, and DOM-based Cross-Site Scripting with advanced WAF bypass payloads.
-- **SSRF (Server-Side Request Forgery):** Internal port scanning and metadata service exploitation (AWS, GCP, Azure).
-- **Open Redirect:** Scanning for malicious redirection via common parameter names.
-- **LFI/RFI/Path Traversal:** Deep directory traversal scanning with 500+ payloads for critical file disclosure.
-
-### 🔍 Discovery & Information Gathering
-- **Sensitive File Scanner:** Automatically discovers `.env`, backups, logs, SSH keys, git configs, and database dumps.
-- **Integrated Crawling:** Sophisticated endpoint discovery and form parsing to map the target attack surface.
-- **WAF Detection & Fingerprinting:** Identify technologies and security layers (CMS, Frameworks, Servers).
+<p align="center">
+  <a href="#"><img src="https://img.shields.io/badge/python-3.x-blue?logo=python&logoColor=white" alt="Python"></a>
+  <a href="#"><img src="https://img.shields.io/badge/go-1.21+-00ADD8?logo=go&logoColor=white" alt="Go"></a>
+  <a href="#"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20Termux%20%7C%20macOS-green" alt="Platform"></a>
+  <a href="#"><img src="https://img.shields.io/badge/license-MIT-yellow" alt="License"></a>
+  <a href="#"><img src="https://img.shields.io/badge/status-active-success" alt="Status"></a>
+</p>
 
 ---
 
-## 🛠️ Integrated Power Tools
+## 📋 Overview
 
-NeoTurst isn't just a script; it's a curated ecosystem:
+**NeoTurst** is an industrial-grade security assessment suite powered by the **NightFury Maximum Destruction v5.0** engine. It combines a custom multi-threaded Python vulnerability scanner with industry-standard tools like **sqlmap** and **ffuf**, plus curated wordlists — all in one unified toolkit.
 
-| Tool | Description |
-| :--- | :--- |
-| **NightFury Engine** | The main Python core for multi-threaded vulnerability analysis. |
-| **ffuf** | Brazingly fast web fuzzer written in Go. |
-| **sqlmap** | The legendary automatic SQL injection and database takeover tool. |
-| **Custom Fuzzer** | A high-performance Go-based directory fuzzer optimized for speed. |
-| **Curated Wordlists** | 20,000+ entries for VHosts, CVE paths, parameters, and more. |
+> **⚠️ DISCLAIMER:** This tool is for **authorized security testing and educational purposes only**. Unauthorized use against targets without explicit consent is illegal. You are responsible for complying with all applicable laws.
 
 ---
 
-## 📥 Installation
+## 🔥 Features
+
+### 🧠 NightFury Scanning Engine (18 Modules)
+
+| Category | Module | Description |
+|----------|--------|-------------|
+| **Injection** | SQLi (Error) | Error-based SQL injection detection |
+| | SQLi (Time) | Time-based blind SQL injection |
+| | SQLi (Boolean) | Boolean-based blind inference |
+| | SQLi (UNION) | UNION-based column enumeration |
+| | Command Injection | OS command injection (time & output-based) |
+| | SSTI | Server-Side Template Injection (Jinja2, Mako, Twig, etc.) |
+| | XXE | XML External Entity injection |
+| **XSS** | Reflected XSS | Non-persistent cross-site scripting |
+| | Stored XSS | Persistent cross-site scripting |
+| | DOM XSS | DOM-based cross-site scripting |
+| **File** | LFI / RFI | Local & Remote File Inclusion |
+| | Sensitive Files | `.env`, backups, SSH keys, git configs, DB dumps |
+| **Infra** | Port Scanner | Basic service & port discovery |
+| | WAF Detection | Web Application Firewall fingerprinting |
+| | Tech Fingerprinting | CMS, framework, server header detection |
+| **Web** | SSRF | Server-Side Request Forgery |
+| | Open Redirect | URL redirect vulnerability |
+| | CORS Misconfig | Cross-Origin Resource Sharing analysis |
+| | CSRF | Cross-Site Request Forgery |
+| | Clickjacking | Frame-options protection check |
+| | Security Headers | Missing HTTP security header audit |
+
+### 🧰 Integrated Tools
+
+| Tool | Language | Purpose |
+|------|----------|---------|
+| **[sqlmap](https://github.com/sqlmapproject/sqlmap)** | Python | Automated SQL injection & DB takeover |
+| **[ffuf](https://github.com/ffuf/ffuf)** | Go | High-speed web fuzzing & content discovery |
+| **Custom Fuzzer** | Go | Lightweight directory fuzzer for Termux |
+| **Wordlists** | — | 200k+ entries for dirs, vhosts, params, CVEs |
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
-Ensure you have Python 3.x and Go installed on your system.
 
-### Setup
 ```bash
-# Clone the repository
+# Python 3.x + pip
+python3 --version
+pip3 --version
+
+# Go (for fuzzers)
+go version
+```
+
+### Installation
+
+```bash
+# Clone
 git clone https://github.com/zyraaatod/NeoTurst.git
 cd NeoTurst
 
-# Install Python dependencies
-pip install -r requirements.txt || pip install requests colorama beautifulsoup4 urllib3
+# Python dependencies
+pip install requests colorama beautifulsoup4 urllib3
 
-# Build the custom fuzzer (optional but recommended)
-cd fuzzer
-go build -o fuzz .
-mv fuzz ../
-cd ..
+# Build custom fuzzer (optional)
+cd fuzzer && go build -o fuzz . && mv fuzz ../ && cd ..
 ```
 
----
+### Usage
 
-## ⚡ Quick Start
-
-Launch the main engine:
 ```bash
+# Launch NightFury engine
 python3 nightfury.py
+
+# Or run tools directly
+python3 sqlmap/sqlmap.py -u "http://target.com/page?id=1"
+./ffuf/ffuf -u "http://target.com/FUZZ" -w wordlist.txt
+./fuzz "http://target.com/FUZZ" wordlist.txt 50 404
 ```
 
-Follow the interactive prompts:
-1. Enter your target URL (e.g., `http://example.com`)
-2. Let the NightFury engine crawl and analyze.
-3. Review the detailed vulnerability report.
+The engine will guide you through:
+1. **Enter target URL** (e.g., `http://example.com`)
+2. **Automated crawl** — discovers endpoints, forms, parameters
+3. **Multi-phase scan** — 18 module test pipeline
+4. **Report** — saved to `report_{domain}.txt`
 
 ---
 
-## 🛡️ Disclaimer
+## 📁 Project Structure
 
-**For Educational and Ethical Testing Purposes Only.**
+```
+NeoTurst/
+├── nightfury.py          # Main scanner (2,570 lines)
+├── wordlist.txt          # 220k-line directory wordlist
+├── sqlmap/               # SQL injection automation tool
+├── ffuf/                 # Web fuzzer (Go)
+├── fuzzer/               # Custom directory fuzzer (Go)
+└── wordlists/            # Additional wordlists
+    ├── SecListsCurated/  # Curated content discovery lists
+    ├── fuzz/             # SQLi, XSS, LFI, XXE, CMDi payloads
+    ├── technology/       # Tech-specific discovery (PHP, ASP, etc.)
+    ├── dns/              # Subdomain enumeration lists
+    └── files/            # File discovery wordlists
+```
 
-The use of NeoTurst for attacking targets without prior mutual consent is illegal. It is the end user's responsibility to obey all applicable local, state, and federal laws. The developers assume no liability and are not responsible for any misuse or damage caused by this program.
+---
+
+## 🛠️ Advanced Usage
+
+### NightFury Scan Pipeline
+
+```
+Input URL → Connection Test → Web Crawl (50 pages max)
+  → WAF Detection → Tech Fingerprinting → Port Scan
+  → Module 1-18 Parallel Scan → Report Generation
+```
+
+### Payload Generation
+
+The engine dynamically generates **500+ payloads per category** (SQLi, XSS, LFI, CMDi) using combinatorial techniques for maximum coverage.
+
+---
+
+## 📸 Sample Output
+
+```
+╔══════════════════════════════════════════════╗
+║       NIGHTFURY MAXIMUM DESTRUCTION v5.0      ║
+║         INDUSTRIAL GRADE - ZERO ERROR         ║
+╚══════════════════════════════════════════════╝
+
+[+] Target: http://example.com
+[+] Connection: OK
+[+] Crawl: 23 endpoints | 4 forms | 12 parameters
+[+] WAF: Cloudflare detected
+[+] Tech: PHP 7.4 | nginx 1.18 | WordPress 5.8
+[+] Scan: 18/18 modules complete
+[+] Report saved to: report_example.com.txt
+```
+
+---
+
+## 📄 Report Format
+
+Reports are saved as plain text with:
+- Target information & timestamps
+- Discovered endpoints & forms
+- Vulnerability findings by severity
+- Payloads used & evidence
+- Remediation recommendations
+
+---
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome.
+
+1. Fork the project
+2. Create your feature branch (`git checkout -b feat/amazing`)
+3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
+4. Push (`git push origin feat/amazing`)
+5. Open a Pull Request
 
 ---
 
 ## 📜 License
-Distributed under the MIT License. See `LICENSE` for more information.
+
+Distributed under the **MIT License**. See `LICENSE` for more information.
 
 ---
+
 <p align="center">
-  Developed with ❤️ for the Security Community
+  <sub>Built for the security community · Ethical hacking only</sub><br>
+  <sub>NeoTurst — Maximum Destruction, Zero Regret</sub>
 </p>
