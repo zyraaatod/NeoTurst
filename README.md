@@ -27,7 +27,7 @@
 
 ## 📋 Overview
 
-**NeoTurst** is an industrial-grade security assessment suite powered by the **NightFury Maximum Destruction v5.0** engine. It combines a custom multi-threaded Python vulnerability scanner with industry-standard tools like **sqlmap** and **ffuf**, plus curated wordlists — all in one unified toolkit.
+**NeoTurst** is an industrial-grade security assessment suite powered by the **NightFury Maximum Destruction v5.0** engine. It combines a custom multi-threaded Python vulnerability scanner with industry-standard tools like **sqlmap**, **ffuf**, and **paramspider**, plus curated wordlists — all in one unified toolkit.
 
 > **⚠️ DISCLAIMER:** This tool is for **authorized security testing and educational purposes only**. Unauthorized use against targets without explicit consent is illegal. You are responsible for complying with all applicable laws.
 
@@ -76,8 +76,9 @@
 |------|----------|---------|
 | **[sqlmap](https://github.com/sqlmapproject/sqlmap)** | Python | Automated SQL injection & DB takeover |
 | **[ffuf](https://github.com/ffuf/ffuf)** | Go | High-speed web fuzzing & content discovery |
+| **[ParamSpider](https://github.com/devanshbatham/ParamSpider)** | Python | Wayback Archive URL miner with parameter extraction |
 | **Custom Fuzzer** | Go | Lightweight directory fuzzer for Termux |
-| **Wordlists** | — | 200k+ entries for dirs, vhosts, params, CVEs |
+| **Wordlists** | — | 444k+ entries for dirs, vhosts, params, CVEs, fuzzing |
 
 ---
 
@@ -106,6 +107,9 @@ pip install requests colorama beautifulsoup4 urllib3
 
 # Build custom fuzzer (optional)
 cd fuzzer && go build -o fuzz . && mv fuzz ../ && cd ..
+
+# ParamSpider (optional — for URL parameter mining)
+cd paramspider && pip install . && cd ..
 ```
 
 ### Usage
@@ -118,6 +122,9 @@ python3 nightfury.py
 python3 sqlmap/sqlmap.py -u "http://target.com/page?id=1"
 ./ffuf/ffuf -u "http://target.com/FUZZ" -w wordlist.txt
 ./fuzz "http://target.com/FUZZ" wordlist.txt 50 404
+
+# ParamSpider — mine parameterized URLs from Wayback Archive
+python3 paramspider/paramspider/main.py -d target.com -p FUZZ
 ```
 
 The engine will guide you through:
@@ -132,17 +139,23 @@ The engine will guide you through:
 
 ```
 NeoTurst/
-├── nightfury.py          # Main scanner (2,132 lines)
-├── wordlist.txt          # 220k-line directory wordlist
-├── sqlmap/               # SQL injection automation tool
-├── ffuf/                 # Web fuzzer (Go)
-├── fuzzer/               # Custom directory fuzzer (Go)
-└── wordlists/            # Additional wordlists
-    ├── SecListsCurated/  # Curated content discovery lists
-    ├── fuzz/             # SQLi, XSS, LFI, XXE, CMDi payloads
-    ├── technology/       # Tech-specific discovery (PHP, ASP, etc.)
-    ├── dns/              # Subdomain enumeration lists
-    └── files/            # File discovery wordlists
+├── nightfury.py          # Main scanner engine (2,132 lines)
+├── wordlist.txt          # 444k-line directory wordlist
+├── sqlmap/               # SQL injection automation tool (full copy)
+├── ffuf/                 # Web fuzzer (Go source + binary)
+├── fuzzer/               # Custom directory fuzzer for Termux (Go)
+├── paramspider/          # Wayback Archive URL miner (Python)
+├── wordlists/            # 60+ wordlist files across 7 categories
+│   ├── SecListsCurated/  # Curated content discovery lists
+│   ├── fuzz/             # SQLi, XSS, LFI, XXE, CMDi payloads
+│   ├── technology/       # Tech-specific discovery (PHP, ASP, etc.)
+│   ├── dns/              # Subdomain enumeration (amass, dnsgen)
+│   ├── files/            # File discovery wordlists
+│   └── dir/              # Directory brute-force lists
+├── params.txt            # 27k URL parameter names
+├── all_files.txt         # 408k file/directory paths
+├── cvePaths.txt          # 7.5k known CVE exploit paths
+└── vhost*.txt            # Virtual host brute-force wordlists
 ```
 
 ---
@@ -160,6 +173,27 @@ Input URL → Connection Test → Web Crawl (50 pages max)
 ### Payload Generation
 
 The engine dynamically generates **200+ unique payloads per category** (SQLi, XSS, LFI, CMDi, SSRF, XXE, SSTI) using combinatorial techniques. All requests are sent **concurrently (20 threads)** for maximum speed.
+
+### ParamSpider — URL Parameter Mining
+
+Extract parameterized URLs from Wayback Machine archives for deeper scanning:
+
+```bash
+# Basic usage
+python3 paramspider/paramspider/main.py -d target.com
+
+# Custom placeholder (feed results into ffuf or NightFury)
+python3 paramspider/paramspider/main.py -d target.com -p FUZZ
+
+# From domain list
+python3 paramspider/paramspider/main.py -l domains.txt
+
+# Output to stream
+python3 paramspider/paramspider/main.py -d target.com -s -p FUZZ
+
+# Using proxy (e.g., Burp Suite)
+python3 paramspider/paramspider/main.py -d target.com --proxy http://127.0.0.1:8080
+```
 
 ---
 
